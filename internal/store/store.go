@@ -189,32 +189,40 @@ func (s *Store) ListCodes(batchID string) ([]model.TicketCode, error) {
 }
 
 func (s *Store) ConsumeTicketCode(batchID, code, worker string) (model.TicketCode, error) {
+	// The barrier lets tests synchronize concurrent consumers so they race on the
+	// same ticket; it is a no-op in production (no barrier is configured). It must
+	// run before the consume transaction so it never splits the atomic read-check-write.
+	s.waitAtBarrier()
+
 	var current model.TicketCode
 	key := []byte(batchID + ":" + code)
-	readErr := s.db.View(func(tx *bbolt.Tx) error {
-		v := tx.Bucket([]byte("codes")).Get(key)
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("codes"))
+		v := bucket.Get(key)
 		if v == nil {
 			return ErrNotFound
 		}
-		return model.Decode(v, &current)
+		if err := model.Decode(v, &current); err != nil {
+			return err
+		}
+		// Re-check state inside the write transaction. bbolt serializes writers, so
+		// this read-check-write is atomic: a concurrent consumer that already consumed
+		// the ticket will have committed before this transaction begins, and this one
+		// observes the updated state instead of clobbering it.
+		if current.State != model.CodePending {
+			return ErrAlreadyConsumed
+		}
+		current.State = model.CodeConsumed
+		current.Holder = worker
+		current.Attempts++
+		current.Validated = true
+		data, err := model.Encode(current)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(key, data)
 	})
-	if readErr != nil {
-		return current, readErr
-	}
-	if current.State != model.CodePending {
-		return current, ErrAlreadyConsumed
-	}
-	s.waitAtBarrier()
-	current.State = model.CodeConsumed
-	current.Holder = worker
-	current.Attempts++
-	current.Validated = true
-	data, err := model.Encode(current)
-	if err != nil {
-		return current, err
-	}
-	writeErr := s.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket([]byte("codes")).Put(key, data) })
-	return current, writeErr
+	return current, err
 }
 
 func (s *Store) PutAttempt(attempt model.ValidationAttempt) error {
