@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "metrics": {
+    "production_loc": 2306,
+    "production_files": 40,
+    "production_packages": 8,
+    "test_files": 10,
+    "production_functions": 175,
+    "decision_points": 345
+  },
+  "persistence": {
+    "module": "go.etcd.io/bbolt",
+    "entities": [
+      "TicketBatch",
+      "TicketCode",
+      "ValidationAttempt",
+      "FailureDetail",
+      "WorkerTask",
+      "BatchSummary"
+    ],
+    "reopen_test": "TestPersistenceSurvivesReopen"
+  },
+  "workflows": [
+    {
+      "steps": [
+        "register a ticket-code batch from operator input",
+        "validate and persist each ticket code",
+        "queue deterministic worker tasks",
+        "process tasks and persist progress summary"
+      ],
+      "test": "TestWorkflowOne"
+    },
+    {
+      "steps": [
+        "submit a batch containing policy-invalid ticket codes",
+        "classify validation issues with failure details",
+        "show rejected input to the operator",
+        "leave persistence unchanged for rejected records"
+      ],
+      "test": "TestWorkflowTwo"
+    },
+    {
+      "steps": [
+        "create a batch through the HTTP service entrypoint",
+        "queue the batch through its operation endpoint",
+        "read the persisted summary and progress state",
+        "expose failures and retry actions for operators"
+      ],
+      "test": "TestWorkflowThree"
+    }
+  ]
+}
